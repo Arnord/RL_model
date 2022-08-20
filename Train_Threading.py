@@ -5,24 +5,109 @@ import traceback
 # import redis
 
 import logging
-
 logger = logging.getLogger('main')
+import utils
 
-from flask import Flask
+from datetime import datetime
+from flask import Flask, jsonify ,request
+import json
+import redis
 
-# app = Flask(__name__)
+app = Flask(__name__)
 
-
-# rd = redis.Redis(host="", port=)
-
-# @app.route('/')
-# def heartbeat():
-#     #
-#     return
+# 创建redis实例
+red_obj = redis.Redis(host='dgx.server.ustb-ai3d.cn', port=6380, db=0)
 
 
-# @app.route('/state')
-# def
+trainer_info = {
+    'policy': None,
+    'device': None,
+    'args': None,
+    'replay_buffer': utils.ReplayBuffer()
+}
+
+
+def build_replay_buffer():
+    state_dim = 9
+    action_dim = 1
+    # set_value = 65  # TODO:反归一化之后
+    set_value = 0
+    replay_buffer = utils.ReplayBuffer(state_dim, action_dim, device=trainer_info['device'])
+
+    # state和next_state错位
+    state = [json.loads(red_obj.lrange("state", 0, -1))
+             for x in range(red_obj.llen("state"))][:-1]
+
+    action = [json.loads(red_obj.lrange("action", 0, -1))
+              for x in range(red_obj.llen("action"))][:-1]
+
+    next_state = [json.loads(red_obj.lrange("state", 0, -1))
+                  for x in range(red_obj.llen("state"))][1:]
+
+    reward = - utils.MSE(next_state, set_value)
+
+    done = 0
+
+    buffer_size = min(len(state), len(action))
+    for t in range(buffer_size):
+        s = state[t]
+        a = action[t]
+        next_s = next_state[t]
+        r = reward[t]
+        d = done
+        replay_buffer.add(s, a, next_s, r, d)
+
+    buffer_name = "replay_buffer"
+    time = datetime.time()
+    replay_buffer.save(f"./buffers/{buffer_name}_{time}")
+
+    return replay_buffer
+
+
+@app.route('/training', methods=['POST'])
+def training():
+    if request.method == 'POST':
+
+        global trainer_info
+        logger.info('Main Service: Receive training request. Model updating...')
+        # args.batch_size
+        eval_freq = 5e3
+        batch_size = 100
+
+        policy = trainer_info['policy']
+        replay_buffer = trainer_info['replay_buffer']
+
+        if red_obj.llen("action") > 900 and red_obj.llen("state") > 900:
+            replay_buffer = build_replay_buffer()
+
+        pol_trains = policy.train(replay_buffer, iterations=int(eval_freq), batch_size=batch_size)
+        torch.save(policy, os.path.join('./', 'best.pth'))  # TODO:路径需要修改，且需要添加模型备份功能
+        logger.info('Main Service: Model training is over, model updated')
+
+
+def service_start(config=None):
+    # print(args)
+    policy_path = "ckpt/BCQ/control.pkl"
+    policy = torch.load(policy_path)
+    trainer_info['policy'] = policy
+    # policy = policy.to(device=0)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    trainer_info['device'] = device
+
+    # TODO:测试用，需删除
+    state_dim = 9
+    action_dim = 1
+    buffer_name = f"replay_buffer"
+    replay_buffer = utils.ReplayBuffer(state_dim, action_dim, device)
+    replay_buffer.load(f"./buffers/{buffer_name}_train")
+    trainer_info['replay_buffer'] = replay_buffer
+
+    app.run(
+        host='0.0.0.0',
+        port=config['flask_port'],
+        debug=False
+    )
 
 
 class Train_Threading(threading.Thread):
@@ -43,37 +128,14 @@ class Train_Threading(threading.Thread):
         # policy = policy.to(device=0)
         self.training_request = False
 
-    def build_replay_buffer(self):  # TODO: 后续有时间的话可以指定构建变量的replay_buffer
-        # TODO:从数据库中取（每隔一段时间用前10e3的数据作为replay_buffer）
-        #
-        #
-
-        a = self.training_request
-        replay_buffer = 0
-        return replay_buffer
-
     def run(self):
-        # app.run(host="0.0.0.0", port=5000)
-        # 当捕获到thickener 的flask后运行
-        while True:
-            try:
-                if self.training_request:
-                    logger.debug('Main Service: Receive training request. Model Training...')
-                    replay_buffer = self.build_replay_buffer()
-                    pol_trains = self.policy.train(replay_buffer, iterations=int(self.eval_freq), batch_size=self.batch_size)
-                    torch.save(self.policy, os.path.join('./', 'best.pth'))         # TODO:路径需要修改
-                    logger.debug('Main Service: Model training is over')
 
-                # TODO: 判断如果经验回访池增加了1000条新数据，则自动开始更新
-                # elif len(new_data) > 1000:
-                #     logger.debug('Main Service: Replay buffer pool is full, model updating...')
-                #     replay_buffer = self.build_replay_buffer()
-                #     pol_trains = self.policy.train(replay_buffer, iterations=int(self.eval_freq), batch_size=self.batch_size)
-                #     torch.save(self.policy, os.path.join('./', 'best.pth'))  # TODO:路径需要修改
-                #     logger.debug('Main Service: Model updating is over')
+        try:
+            service_start(config=self.config)
+            logger.debug('Main Service:' + 'Thickener-%s' % self.th_id + 'Train Service start')
+        except Exception as e:
+            traceback.print_exc()
+            logger.warning('Main Service:' + 'Thickener-%s ' % self.th_id + 'Train Service break: ' + str(e))
 
-                logger.debug('Main Service: Train Service loop')
-            except Exception as e:
-                traceback.print_exc()
-                logger.warning('Main Service:' + 'Thickener-%s ' % self.th_id + 'Train Service break: ' + str(e))
+
 

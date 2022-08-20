@@ -56,7 +56,7 @@ if __name__ == "__main__":
 
     level = logging.DEBUG if sys.argv[-1].endswith('debug') else logging.INFO
     fh = logging.FileHandler("RL_model.log", encoding="utf-8", mode="a")
-    formatter = logging.FileHandler("%(asctime)s - %(name)s-%(levalname)s %(message)s")
+    formatter = logging.Formatter("%(asctime)s - %(name)s-%(levelname)s %(message)s")
     fh.setFormatter(formatter)
     consoleHandler = logging.StreamHandler(sys.stdout)
     consoleHandler.setFormatter(formatter)

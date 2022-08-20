@@ -2,7 +2,9 @@
   <dictionary name="Arnord">
     <words>
       <w>ckpt</w>
+      <w>cuda</w>
       <w>interactor</w>
+      <w>ustb</w>
     </words>
   </dictionary>
 </component>
